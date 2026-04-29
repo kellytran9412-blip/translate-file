@@ -5,102 +5,75 @@ import google.generativeai as genai
 import io
 import time
 
-# Cấu hình trang web
-st.set_page_config(page_title="Dịch Word Trung-Việt", layout="centered")
+st.set_page_config(page_title="Dịch Word Pro", layout="centered")
 
-st.title("📱 App Dịch Word Song Ngữ v4.0")
-st.markdown("---")
+st.title("📱 App Dịch Word Siêu Tốc v5.0")
 
-# 1. Khu vực nhập thông tin
-api_key = st.text_input("Nhập Gemini API Key:", type="password", help="Lấy key tại Google AI Studio")
-mode = st.radio("Lựa chọn hình thức dịch:", ("Dịch Song Ngữ (Trung trên - Việt dưới)", "Chỉ dịch sang Tiếng Việt (Thay thế)"))
+# Nhập liệu
+api_key = st.text_input("Nhập Gemini API Key:", type="password")
+mode = st.radio("Hình thức dịch:", ("Song ngữ (Trung-Việt)", "Chỉ Tiếng Việt"))
+uploaded_file = st.file_uploader("Chọn file .docx", type="docx")
 
-# 2. Giao diện tải file
-uploaded_file = st.file_uploader("Chọn tập tin Word (.docx) cần dịch", type="docx")
-
-if uploaded_file is not None:
-    if st.button("🚀 BẮT ĐẦU DỊCH NGAY"):
-        if not api_key:
-            st.error("Vui lòng nhập API Key trước khi dịch!")
-        else:
-            try:
-                # Cấu hình AI
-                genai.configure(api_key=api_key)
-                model = genai.GenerativeModel('gemini-1.5-flash')
+if uploaded_file and api_key:
+    if st.button("🚀 BẮT ĐẦU DỊCH"):
+        try:
+            genai.configure(api_key=api_key)
+            # Sử dụng phiên bản ổn định nhất để tránh lỗi 404
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            
+            doc = Document(uploaded_file)
+            
+            # Lọc danh sách đoạn văn có chữ
+            paras = [p for p in doc.paragraphs if p.text.strip()]
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for p in cell.paragraphs:
+                            if p.text.strip(): paras.append(p)
+            
+            total = len(paras)
+            st.info(f"Phát hiện {total} đoạn văn. Đang dịch theo cụm để tránh lỗi Quota...")
+            progress_bar = st.progress(0)
+            
+            # Gom 10 đoạn văn dịch 1 lần để tối ưu hóa
+            batch_size = 10 
+            for i in range(0, total, batch_size):
+                batch = paras[i:i + batch_size]
+                combined_text = "\n---\n".join([p.text for p in batch])
                 
-                # Đọc file Word
-                doc = Document(uploaded_file)
+                prompt = f"Dịch các đoạn văn sau sang tiếng Việt. Giữ nguyên thứ tự, phân cách các đoạn bằng '---'. Chỉ trả về bản dịch:\n{combined_text}"
                 
-                # Thu thập tất cả paragraph và ô trong bảng
-                all_paras = []
-                for p in doc.paragraphs:
-                    if p.text.strip(): all_paras.append(p)
-                for table in doc.tables:
-                    for row in table.rows:
-                        for cell in row.cells:
-                            for p in cell.paragraphs:
-                                if p.text.strip(): all_paras.append(p)
-
-                total = len(all_paras)
-                progress_bar = st.progress(0)
-                st.info(f"Phát hiện {total} đoạn văn cần xử lý. Đang tiến hành dịch...")
-
-                # Hàm xử lý dịch thuật tối ưu
-                def translate_text(text):
-                    prompt = f"Dịch đoạn sau sang tiếng Việt, chỉ trả về bản dịch, không giải thích: {text}"
-                    # Thử lại tối đa 3 lần nếu gặp lỗi 429
-                    for attempt in range(3):
-                        try:
-                            resp = model.generate_content(prompt)
-                            return resp.text.strip()
-                        except Exception as e:
-                            if "429" in str(e) and attempt < 2:
-                                time.sleep(5) # Nghỉ 5 giây rồi thử lại
-                            else:
-                                raise e
-                    return None
-
-                # Chạy dịch từng đoạn
-                for i, para in enumerate(all_paras):
-                    original_text = para.text
-                    translated = translate_text(original_text)
-                    
-                    if translated:
+                # Cơ chế thử lại nếu lỗi Quota
+                translated_batch = []
+                for attempt in range(3):
+                    try:
+                        response = model.generate_content(prompt)
+                        translated_batch = response.text.split("---")
+                        break
+                    except Exception as e:
+                        if "429" in str(e):
+                            time.sleep(15) # Nghỉ 15 giây nếu quá tải
+                        else: st.error(f"Lỗi API: {e}"); st.stop()
+                
+                # Áp dụng bản dịch vào file Word
+                for idx, p in enumerate(batch):
+                    if idx < len(translated_batch):
+                        result = translated_batch[idx].strip()
                         if "Song ngữ" in mode:
-                            # Lấy cỡ chữ của dòng gốc
-                            size = 12
-                            if para.runs and para.runs[0].font.size:
-                                size = para.runs[0].font.size.pt
-                            
-                            para.add_run("\n") # Xuống dòng
-                            new_run = para.add_run(translated)
-                            new_run.font.name = 'Times New Roman'
-                            new_run.font.size = Pt(size)
-                            new_run.italic = True
+                            p.add_run(f"\n{result}").font.name = 'Times New Roman'
+                            p.runs[-1].font.size = Pt(11)
+                            p.runs[-1].italic = True
                         else:
-                            # Thay thế hoàn toàn
-                            para.text = translated
-                            for run in para.runs:
-                                run.font.name = 'Times New Roman'
-                    
-                    # Cập nhật tiến độ
-                    progress_bar.progress((i + 1) / total)
-
-                # Lưu file vào bộ nhớ đệm
-                output = io.BytesIO()
-                doc.save(output)
+                            p.text = result
+                            for run in p.runs: run.font.name = 'Times New Roman'
                 
-                st.success("Chúc mừng! Đã dịch xong toàn bộ tài liệu.")
-                st.download_button(
-                    label="📥 TẢI FILE KẾT QUẢ VỀ ĐIỆN THOẠI",
-                    data=output.getvalue(),
-                    file_name=f"Dich_{uploaded_file.name}",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )
-
-            except Exception as e:
-                st.error(f"Đã xảy ra lỗi: {str(e)}")
-                st.warning("Mẹo: Nếu lỗi 'Quota', hãy đợi 1 phút rồi bấm lại hoặc chia nhỏ file Word.")
-
-st.markdown("---")
-st.caption("Ứng dụng được thiết kế bởi Gemini - Hỗ trợ font Times New Roman & Giữ nguyên Format.")
+                progress_bar.progress(min((i + batch_size) / total, 1.0))
+            
+            # Xuất file
+            bio = io.BytesIO()
+            doc.save(bio)
+            st.success("Đã hoàn thành!")
+            st.download_button("📥 TẢI FILE VỀ ĐIỆN THOẠI", bio.getvalue(), f"Dich_{uploaded_file.name}", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            
+        except Exception as e:
+            st.error(f"Lỗi hệ thống: {e}")
