@@ -21,7 +21,7 @@ if uploaded_file is not None and api_key:
     if st.button("🚀 BẮT ĐẦU DỊCH"):
         try:
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-2.0-flash')
             
             # Đọc file Word từ bộ nhớ đệm
             doc = Document(uploaded_file)
